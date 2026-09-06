@@ -1,0 +1,18 @@
+{
+  "name": "sistema-solar-vr",
+  "version": "0.1.0",
+  "description": "Sistema Solar em VR (WebXR) para o Ensino Fundamental II — Pico Neo 3",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --format=iife --target=es2018 --minify --sourcemap --outfile=dist/app.js",
+    "dev": "esbuild src/main.js --bundle --format=iife --target=es2018 --sourcemap --outfile=dist/app.js --watch --servedir=. --serve=8080",
+    "preview": "node tools/build-preview.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "esbuild": "^0.24.0",
+    "three": "^0.170.0"
+  },
+  "private": true
+}
