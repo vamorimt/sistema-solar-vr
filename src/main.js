@@ -5,10 +5,11 @@ import { SistemaSolar } from './scene/sistema.js';
 import { Painel } from './ui/painel.js';
 import { HUD, CSS } from './ui/hud.js';
 import { ControlesXR } from './xr/controles.js';
-import { PLANETAS, LUAS, CINTUROES, MISSAO } from './data/corpos.js';
-import { VELOCIDADES, fmtData, fichaDe, tituloDe, subtituloDe, dadosDe, AJUDA_VR, AJUDA_DESKTOP } from './app/textos.js';
+import { Narrador } from './app/narrador.js';
+import { PLANETAS, LUAS, CINTUROES, MISSAO, NARRACAO } from './data/corpos.js';
+import { RITMOS, ritmoPorId, fmtData, fichaDe, relogioDe, tituloDe, subtituloDe, dadosDe, AJUDA_VR, AJUDA_DESKTOP } from './app/textos.js';
 
-const VERSAO = '0.1.0';
+const VERSAO = '0.2.0';
 const MANIFESTO = {
   sol: '2k_sun.jpg', mercurio: '2k_mercury.jpg', venus: '2k_venus_surface.jpg', terra: '2k_earth_daymap.jpg',
   terraNuvens: 'earth_clouds_1024.png', terraNormal: 'earth_normal_2048.jpg', terraEspecular: 'earth_specular_2048.jpg',
@@ -17,15 +18,21 @@ const MANIFESTO = {
 };
 const LINEARES = new Set(['terraNormal', 'terraEspecular']);
 const CREDITOS = 'Dados: NASA / JPL · Texturas: Solar System Scope (CC BY 4.0), three.js';
+const POSICAO_INICIAL_VR = new THREE.Vector3(0, 2.5, 26);
+const CAMERA_INICIAL = new THREE.Vector3(0, 12, 34);
 
 // ---------------------------------------------------------------- estado
 const estado = {
-  data: Date.now(), vel: 3, pausado: false, modo: 'didatico', orbitas: true, rotulos: true, estacao: false,
-  selecionado: null, hover: null, seguindo: null, missao: null, conteudo: null, tween: null, painelAberto: false,
+  data: Date.now(), ritmo: 1, pausado: false, modo: 'didatico', orbitas: true, rotulos: true, estacao: false,
+  selecionado: null, hover: null, seguindo: null, missao: null, filme: true, filmeSuspenso: false,
+  conteudo: null, tween: null, painelAberto: false,
 };
+let missaoSeq = 0;
 let progresso = { quiz: {}, missaoEtapa: 0 };
 try { progresso = { ...progresso, ...(JSON.parse(localStorage.getItem('ssvr.progresso') || '{}')) }; } catch (e) { /* sem armazenamento */ }
 function salvarProgresso() { try { localStorage.setItem('ssvr.progresso', JSON.stringify(progresso)); } catch (e) { /* ignora */ } }
+const ritmoAtual = () => RITMOS[estado.ritmo];
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- base
 const style = document.createElement('style');
@@ -45,12 +52,33 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.05, 8000);
-camera.position.set(0, 12, 34);
+camera.position.copy(CAMERA_INICIAL);
 const rig = new THREE.Group();
 rig.name = 'rig';
 rig.add(camera);
 scene.add(rig);
 scene.add(new THREE.AmbientLight(0x2a3a5c, 0.9));
+
+// escurecimento (fade) para teletransportes confortáveis em VR
+const fade = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthTest: false, depthWrite: false }));
+fade.position.z = -0.4;
+fade.renderOrder = 100;
+fade.visible = false;
+camera.add(fade);
+let fadeAlvo = 0, fadeVel = 0;
+function fadePara(alvo, dur) {
+  fadeAlvo = alvo;
+  fadeVel = dur > 0 ? 1 / dur : 1e6;
+  fade.visible = true;
+  return new Promise((r) => setTimeout(r, dur * 1000));
+}
+function atualizarFade(dt) {
+  if (!fade.visible) return;
+  const m = fade.material;
+  const passo = fadeVel * dt;
+  m.opacity = m.opacity < fadeAlvo ? Math.min(fadeAlvo, m.opacity + passo) : Math.max(fadeAlvo, m.opacity - passo);
+  if (m.opacity === 0 && fadeAlvo === 0) fade.visible = false;
+}
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -59,10 +87,13 @@ controls.minDistance = 0.4;
 controls.maxDistance = 4000;
 controls.target.set(0, 0, 0);
 
-// Painéis VR (vivem dentro do rig para acompanhar o usuário)
-const painelInfo = new Painel({ largura: 1.25, altura: 0.9, px: 1024, nome: 'painel-info' });
-const painelMenu = new Painel({ largura: 0.34, altura: 0.30, px: 680, nome: 'painel-menu' });
-rig.add(painelInfo.mesh);
+// Painéis VR (dentro do rig, para acompanhar o usuário)
+const painelInfo = new Painel({ largura: 1.25, altura: 0.95, px: 1024, nome: 'painel-info' });
+const painelMenu = new Painel({ largura: 0.34, altura: 0.28, px: 680, nome: 'painel-menu' });
+rig.add(painelInfo.mesh, painelMenu.mesh);
+let menuAtivo = false; // vira true quando o controle esquerdo conecta (só em VR)
+
+const narrador = new Narrador({ fontes: window.__NARRACAO__ || null });
 
 let sistema = null;
 let controlesXR = null;
@@ -107,13 +138,15 @@ async function iniciar() {
     aoMenu: () => alternarPainel(),
     aoBotaoA: () => alternarPainel(),
     aoBotaoB: () => voltarInicio(),
-    aoConectar: (info) => { if (info.mao === 'left') { info.grip.add(painelMenu.mesh); painelMenu.mesh.position.set(0, 0.09, -0.11); painelMenu.mesh.rotation.x = -Math.PI / 3; painelMenu.visivel = true; atualizarMenu(true); } },
+    aoConectar: (info) => { if (info.mao === 'left') { menuAtivo = true; atualizarMenu(); } },
     velocidade: velocidadeLocomocao,
   });
   criarBotaoVR();
   configurarDesktop();
   hud.setEstado(estado);
-  hud.setVelocidade(VELOCIDADES[estado.vel].rotulo, estado.pausado);
+  hud.setRitmo(ritmoAtual(), estado.pausado);
+  hud.setData(fmtData(estado.data));
+  if (narrador.suportaVoz) window.speechSynthesis.getVoices(); // aquece a lista de vozes
   setTimeout(() => hud.setCarregando(null), 300);
   mostrarBoasVindas();
   renderer.setAnimationLoop(loop);
@@ -150,18 +183,23 @@ function criarBotaoVR() {
     controls.enabled = false;
     estado.seguindo = null;
     estado.tween = null;
-    if (estado.estacao) { rig.position.set(0, 0, 22); rig.rotation.set(0, 0, 0); }
-    else { rig.position.set(0, 2.5, 26); rig.rotation.set(0, 0, 0); }
+    narrador.parar();
+    if (estado.missao) { estado.missao = null; hud.setEstado(estado); }
+    if (estado.estacao) { rig.position.set(-16, 0, 14); rig.rotation.set(0, 0, 0); }
+    else { rig.position.copy(POSICAO_INICIAL_VR); rig.rotation.set(0, 0, 0); }
     setTimeout(() => { mostrarBoasVindas(); }, 1200);
   });
   renderer.xr.addEventListener('sessionend', () => {
     controls.enabled = true;
     rig.position.set(0, 0, 0);
     rig.rotation.set(0, 0, 0);
-    camera.position.set(0, 12, 34);
+    camera.position.copy(CAMERA_INICIAL);
     controls.target.set(0, 0, 0);
     estado.seguindo = null;
+    narrador.parar();
     painelInfo.esconder();
+    menuAtivo = false;
+    painelMenu.visivel = false;
   });
 }
 
@@ -179,21 +217,40 @@ function velocidadeLocomocao() {
   return THREE.MathUtils.clamp(menor * 0.9, 0.6, estado.modo === 'real' ? 400 : 40);
 }
 
-/** Posiciona o painel de informações à frente da cabeça (coordenadas do rig). */
+/** Coloca o painel de informações à frente e um pouco à esquerda da cabeça (coordenadas do rig). */
 function posicionarPainel() {
   rig.updateMatrixWorld(true);
   camera.getWorldPosition(vCam);
   camera.getWorldDirection(vTmp);
   vTmp.y = 0;
   if (vTmp.lengthSq() < 1e-4) vTmp.set(0, 0, -1);
-  vTmp.normalize();
-  // painel um pouco à esquerda do olhar, para não cobrir o corpo observado
-  vTmp.applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.42);
+  vTmp.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.38);
   const pos = vTmp2.copy(vCam).addScaledVector(vTmp, 1.5);
   pos.y = vCam.y - 0.1;
   painelInfo.mesh.position.copy(rig.worldToLocal(pos.clone()));
-  const olhar = rig.worldToLocal(vCam.clone());
-  painelInfo.mesh.lookAt(olhar);
+  orientarPaineis();
+}
+
+/** Mantém os painéis sempre de frente para a cabeça (evita vê-los "ao contrário"). */
+function orientarPaineis() {
+  camera.getWorldPosition(vCam);
+  if (painelInfo.mesh.visible) {
+    painelInfo.mesh.updateMatrixWorld();
+    vTmp.setFromMatrixPosition(painelInfo.mesh.matrixWorld);
+    painelInfo.mesh.lookAt(vCam.x, vTmp.y, vCam.z);
+  }
+  if (menuAtivo && controlesXR) {
+    const esq = controlesXR.maoEsquerda;
+    const rastreado = !!(esq && esq.controller.visible);
+    painelMenu.mesh.visible = rastreado;
+    if (rastreado) {
+      esq.grip.getWorldPosition(vTmp);
+      vTmp.y += 0.17;
+      painelMenu.mesh.position.copy(rig.worldToLocal(vTmp.clone()));
+      painelMenu.mesh.updateMatrixWorld();
+      painelMenu.mesh.lookAt(vCam.x, vTmp.y - 0.05, vCam.z);
+    }
+  }
 }
 
 function alternarPainel() {
@@ -207,9 +264,9 @@ function mostrarConteudo(c, reposicionar = false) {
   estado.conteudo = c;
   const estavaFechado = !estado.painelAberto;
   estado.painelAberto = true;
-  if (renderer.xr.isPresenting && (estavaFechado || reposicionar)) posicionarPainel();
   painelInfo.mostrar(c);
-  if (!renderer.xr.isPresenting) painelInfo.mesh.visible = false; // no desktop o conteúdo vai para o cartão 2D
+  if (renderer.xr.isPresenting) { if (estavaFechado || reposicionar) posicionarPainel(); }
+  else painelInfo.mesh.visible = false; // no desktop o conteúdo vai para o cartão 2D
   hud.mostrarCartao(c);
 }
 
@@ -225,25 +282,28 @@ function mostrarBoasVindas() {
     titulo: 'Bem-vindo ao Sistema Solar VR',
     subtitulo: 'Ciências da Natureza · Ensino Fundamental II · BNCC EF06CI13, EF08CI12-13, EF09CI14-17',
     texto: emVR
-      ? 'Você está flutuando acima do plano do Sistema Solar. O Sol está à sua frente. Aponte para um planeta e puxe o gatilho para conhecê-lo, ou comece pela Missão Guiada.\n\n' + AJUDA_VR
-      : 'Explore o Sistema Solar em 3D. Clique nos planetas para conhecer cada um, ou siga a Missão Guiada com perguntas ao final de cada parada.\n\n' + AJUDA_DESKTOP,
-    botoes: [{ id: 'missao', rotulo: 'Missão guiada', primario: true }, { id: 'fechar', rotulo: 'Explorar livremente' }, { id: 'ajuda', rotulo: 'Ajuda' }],
+      ? 'Você está flutuando acima do Sistema Solar, com o Sol à sua frente. "Assistir a viagem" leva você de planeta em planeta com narração; ou aponte para um planeta e puxe o gatilho para explorar por conta própria.\n\n' + AJUDA_VR
+      : 'Explore o Sistema Solar em 3D. "Assistir a viagem" leva você de planeta em planeta com narração e perguntas; ou clique nos planetas para explorar por conta própria.\n\n' + AJUDA_DESKTOP,
+    botoes: [{ id: 'missao', rotulo: 'Assistir a viagem', primario: true }, { id: 'fechar', rotulo: 'Explorar livremente' }, { id: 'ajuda', rotulo: 'Ajuda' }],
     rodape: `v${VERSAO} · ${CREDITOS}`,
-    tamanhoTexto: 26,
+    tamanhoTexto: 25,
   }, true);
 }
+
+function botaoRitmo() { return { id: 'ritmo', rotulo: `${ritmoAtual().rotulo} ▸` }; }
 
 function conteudoInfo(id) {
   const d = dadosDe(id);
   if (!d) return null;
-  const texto = d.resumo + '\n\n' + fichaDe(id).join('\n');
+  const texto = d.resumo + '\n\n' + fichaDe(id).join('\n') + '\n\n' + relogioDe(id, ritmoAtual(), estado.pausado);
   const botoes = [];
   if (!estado.estacao) botoes.push({ id: 'viajar', rotulo: 'Viajar até aqui', primario: true });
   if (d.fatos) botoes.push({ id: 'fatos', rotulo: 'Curiosidades' });
   if (d.quiz) botoes.push({ id: 'quiz', rotulo: progresso.quiz[id]?.acertou ? 'Quiz ✓' : 'Quiz' });
-  if (estado.missao) botoes.push({ id: 'voltarMissao', rotulo: 'Voltar à missão' });
+  botoes.push(botaoRitmo());
+  if (estado.missao) botoes.push({ id: 'voltarMissao', rotulo: 'Voltar à viagem' });
   botoes.push({ id: 'fechar', rotulo: 'Fechar' });
-  return { titulo: tituloDe(id), subtitulo: subtituloDe(id), texto, botoes, rodape: CREDITOS, tamanhoTexto: 27 };
+  return { titulo: tituloDe(id), subtitulo: subtituloDe(id), texto, botoes, rodape: CREDITOS, tamanhoTexto: 26 };
 }
 
 function conteudoFatos(id) {
@@ -251,17 +311,19 @@ function conteudoFatos(id) {
   return {
     titulo: `${d.nome} · Curiosidades`, subtitulo: subtituloDe(id),
     texto: d.fatos.map((f) => '• ' + f).join('\n'),
-    botoes: [{ id: 'info', rotulo: 'Voltar' }, ...(d.quiz ? [{ id: 'quiz', rotulo: 'Quiz', primario: true }] : []), { id: 'fechar', rotulo: 'Fechar' }],
-    tamanhoTexto: 29,
+    botoes: [{ id: 'info', rotulo: 'Voltar' }, ...(d.quiz ? [{ id: 'quiz', rotulo: 'Quiz', primario: true }] : []), ...(estado.missao ? [{ id: 'voltarMissao', rotulo: 'Voltar à viagem' }] : []), { id: 'fechar', rotulo: 'Fechar' }],
+    tamanhoTexto: 28,
   };
 }
 
-function conteudoQuiz(id) {
+function conteudoQuiz(id, checkpoint = false) {
   const d = dadosDe(id), q = d.quiz;
   return {
-    titulo: `Quiz · ${d.nome}`, subtitulo: 'Escolha a resposta correta', texto: q.pergunta,
-    botoes: [...q.opcoes.map((o, i) => ({ id: 'resp' + i, rotulo: o, largura: 936 })), { id: 'info', rotulo: 'Voltar' }],
-    tamanhoTexto: 30,
+    titulo: checkpoint ? `Checkpoint · ${d.nome}` : `Quiz · ${d.nome}`,
+    subtitulo: checkpoint ? 'Responda para continuar a viagem' : 'Escolha a resposta correta',
+    texto: q.pergunta,
+    botoes: [...q.opcoes.map((o, i) => ({ id: 'resp' + i, rotulo: o, largura: 936 })), { id: checkpoint ? 'voltarMissao' : 'info', rotulo: 'Voltar' }],
+    tamanhoTexto: 30, corBorda: checkpoint ? '#f2b84b' : undefined,
   };
 }
 
@@ -274,6 +336,7 @@ function responderQuiz(id, i) {
   progresso.quiz[id] = p;
   salvarProgresso();
   const total = Object.values(progresso.quiz).filter((x) => x.acertou).length;
+  const emMissao = !!estado.missao;
   mostrarConteudo({
     titulo: acertou ? 'Correto!' : 'Ainda não…',
     subtitulo: q.pergunta,
@@ -282,7 +345,7 @@ function responderQuiz(id, i) {
     botoes: [
       ...q.opcoes.map((o, k) => ({ id: 'x' + k, rotulo: o, largura: 936, cor: k === q.correta ? '#2aa15a' : (k === i ? '#c0392b' : '#1d2a4a') })),
       ...(acertou ? [] : [{ id: 'quiz', rotulo: 'Tentar de novo' }]),
-      { id: estado.missao ? 'voltarMissao' : 'info', rotulo: 'Continuar', primario: true },
+      { id: emMissao ? 'continuarMissao' : 'info', rotulo: emMissao ? 'Continuar a viagem' : 'Continuar', primario: true },
     ],
     rodape: `Quizzes acertados: ${total} de ${[...PLANETAS, ...CINTUROES, LUAS[0]].length + 1}`,
     tamanhoTexto: 28,
@@ -302,45 +365,83 @@ function conteudoEstacao() {
   };
 }
 
-// ---------------------------------------------------------------- missão guiada
+// ---------------------------------------------------------------- missão guiada (filme narrado)
 function iniciarMissao(etapa = 0) {
-  estado.missao = { etapa };
+  estado.missao = { etapa, token: 0 };
+  estado.filmeSuspenso = false;
   hud.setEstado(estado);
   irEtapa(etapa);
 }
 
-function irEtapa(n) {
+function conteudoMissao(e, n) {
+  const ultimo = n === MISSAO.length - 1;
+  const botoes = [{ id: 'repetir', rotulo: 'Ouvir de novo' }];
+  if (e.corpo) botoes.push({ id: 'info', rotulo: 'Ficha' });
+  if (e.checkpoint) botoes.push({ id: 'checkpoint', rotulo: progresso.quiz[e.checkpoint]?.acertou ? 'Checkpoint ✓' : 'Checkpoint' });
+  botoes.push(botaoRitmo());
+  botoes.push({ id: 'filme', rotulo: estado.filme && !estado.filmeSuspenso ? 'Pausar filme' : 'Continuar filme' });
+  botoes.push({ id: 'proxima', rotulo: ultimo ? 'Concluir' : 'Próxima ▶', primario: true });
+  botoes.push({ id: 'sairMissao', rotulo: 'Sair' });
+  return {
+    titulo: e.titulo,
+    subtitulo: `Viagem guiada · parada ${n + 1} de ${MISSAO.length} · ${ritmoAtual().descricao}`,
+    texto: NARRACAO[e.id] || '',
+    botoes, tamanhoTexto: 27, corBorda: '#f2b84b',
+  };
+}
+
+async function irEtapa(n) {
   if (!estado.missao) return;
-  if (n >= MISSAO.length) return finalizarMissao();
   if (n < 0) n = 0;
+  if (n >= MISSAO.length) return finalizarMissao();
   const e = MISSAO[n];
+  const token = ++missaoSeq;
   estado.missao.etapa = n;
+  estado.missao.token = token;
+  estado.missao.checkpointPendente = !!e.checkpoint;
   progresso.missaoEtapa = n;
   salvarProgresso();
+  narrador.parar();
   if (estado.estacao) sairEstacao();
-  const d = e.corpo !== 'escala' ? dadosDe(e.corpo) : null;
-  if (d) { estado.selecionado = e.corpo; viajar(e.corpo); }
-  const botoes = [];
-  if (e.corpo === 'escala') botoes.push({ id: 'modo', rotulo: estado.modo === 'real' ? 'Voltar às distâncias didáticas' : 'Ativar distâncias reais', primario: true });
-  else botoes.push({ id: 'info', rotulo: 'Ficha de ' + d.nome });
-  if (d && d.quiz) botoes.push({ id: 'quiz', rotulo: progresso.quiz[e.corpo]?.acertou ? 'Quiz ✓' : 'Quiz', primario: e.corpo !== 'escala' });
-  if (n > 0) botoes.push({ id: 'anterior', rotulo: '◀ Anterior' });
-  botoes.push({ id: 'proxima', rotulo: n === MISSAO.length - 1 ? 'Concluir' : 'Próxima ▶' });
-  botoes.push({ id: 'sairMissao', rotulo: 'Sair' });
-  mostrarConteudo({ titulo: e.titulo, subtitulo: `Missão guiada · parada ${n + 1} de ${MISSAO.length}`, texto: e.texto, botoes, tamanhoTexto: 29, corBorda: '#f2b84b' }, true);
+  if (e.modo && e.modo !== estado.modo) setModo(e.modo);
+  setRitmo(ritmoPorId(e.ritmo));
+  if (e.corpo) { estado.selecionado = e.corpo; await viajar(e.corpo, { fator: e.distancia || 1 }); }
+  else await irInicio();
+  if (!estado.missao || estado.missao.token !== token) return;
+  mostrarConteudo(conteudoMissao(e, n), true);
+  await narrador.falar(e.id, NARRACAO[e.id] || e.titulo);
+  if (!estado.missao || estado.missao.token !== token) return;
+  if (e.id === 'fim') { await esperar(1500); if (estado.missao && estado.missao.token === token) finalizarMissao(); return; }
+  if (e.checkpoint && !progresso.quiz[e.checkpoint]?.acertou) {
+    estado.selecionado = e.checkpoint;
+    mostrarConteudo(conteudoQuiz(e.checkpoint, true));
+    return; // segue quando o aluno responder
+  }
+  if (estado.filme && !estado.filmeSuspenso) {
+    await esperar(2500);
+    if (estado.missao && estado.missao.token === token) irEtapa(n + 1);
+  }
 }
 
 function finalizarMissao() {
-  const ids = MISSAO.map((e) => e.corpo).filter((c) => dadosDe(c)?.quiz);
+  const ids = MISSAO.map((e) => e.checkpoint).filter(Boolean);
   const acertos = ids.filter((c) => progresso.quiz[c]?.acertou).length;
   estado.missao = null;
+  narrador.parar();
   hud.setEstado(estado);
   mostrarConteudo({
-    titulo: 'Missão concluída!', subtitulo: 'Você percorreu o Sistema Solar do Sol ao Cinturão de Kuiper',
-    texto: `Quizzes acertados: ${acertos} de ${ids.length}.\n\nO que você aprendeu: o Sol concentra quase toda a massa; os 4 planetas rochosos ficam perto do Sol e os 4 gigantes, longe; entre eles há o Cinturão de Asteroides; além de Netuno, o Cinturão de Kuiper. E, acima de tudo: o Sistema Solar é quase todo espaço vazio.`,
-    botoes: [{ id: 'missao', rotulo: 'Refazer a missão' }, { id: 'estacao', rotulo: 'Comparar tamanhos' }, { id: 'fechar', rotulo: 'Explorar livremente', primario: true }],
-    corBorda: '#2aa15a', tamanhoTexto: 28,
+    titulo: 'Viagem concluída!', subtitulo: 'Do Sol ao Cinturão de Kuiper',
+    texto: `Checkpoints acertados: ${acertos} de ${ids.length}.\n\nO que vimos: o Sol concentra quase toda a massa; os 4 planetas rochosos ficam perto do Sol e os 4 gigantes, longe; entre eles, o Cinturão de Asteroides; além de Netuno, o Cinturão de Kuiper. Cada planeta tem o seu próprio dia e o seu próprio ano — e o Sistema Solar é quase todo espaço vazio.\n\nAgora explore livremente: aponte para qualquer planeta ou lua.`,
+    botoes: [{ id: 'fechar', rotulo: 'Explorar livremente', primario: true }, { id: 'estacao', rotulo: 'Comparar tamanhos' }, { id: 'missao', rotulo: 'Ver de novo' }],
+    corBorda: '#2aa15a', tamanhoTexto: 27,
   }, true);
+}
+
+function continuarMissao(avancar) {
+  if (!estado.missao) return fecharPainel();
+  const n = estado.missao.etapa;
+  if (avancar || (estado.filme && !estado.filmeSuspenso)) irEtapa(n + 1);
+  else mostrarConteudo(conteudoMissao(MISSAO[n], n));
 }
 
 // ---------------------------------------------------------------- ações
@@ -348,28 +449,42 @@ function aoBotao(id) {
   const sel = estado.selecionado;
   if (id.startsWith('resp')) return responderQuiz(sel, Number(id.slice(4)));
   if (id.startsWith('x')) return; // botões de resultado (inertes)
+  const suspendeFilme = ['info', 'fatos', 'quiz', 'checkpoint', 'ajuda', 'estacao'].includes(id);
+  if (estado.missao && suspendeFilme) { estado.filmeSuspenso = true; narrador.parar(); }
   switch (id) {
     case 'viajar': if (sel) viajar(sel); return;
     case 'info': if (sel) mostrarConteudo(conteudoInfo(sel)); return;
     case 'fatos': if (sel) mostrarConteudo(conteudoFatos(sel)); return;
-    case 'quiz': if (sel && dadosDe(sel)?.quiz) mostrarConteudo(conteudoQuiz(sel)); return;
+    case 'quiz': if (sel && dadosDe(sel)?.quiz) mostrarConteudo(conteudoQuiz(sel, !!estado.missao && MISSAO[estado.missao.etapa].checkpoint === sel)); return;
+    case 'checkpoint': { const c = estado.missao && MISSAO[estado.missao.etapa].checkpoint; if (c) { estado.selecionado = c; mostrarConteudo(conteudoQuiz(c, true)); } return; }
     case 'fechar': fecharPainel(); return;
     case 'ajuda': mostrarConteudo(conteudoAjuda(), true); return;
-    case 'missao': iniciarMissao(0); return;
-    case 'voltarMissao': if (estado.missao) irEtapa(estado.missao.etapa); else fecharPainel(); return;
-    case 'proxima': if (estado.missao) irEtapa(estado.missao.etapa + 1); return;
-    case 'anterior': if (estado.missao) irEtapa(estado.missao.etapa - 1); return;
-    case 'sairMissao': estado.missao = null; hud.setEstado(estado); fecharPainel(); return;
-    case 'modo': alternarModo(); if (estado.missao) irEtapa(estado.missao.etapa); return;
+    case 'missao': estado.filme = true; iniciarMissao(0); return;
+    case 'repetir': if (estado.missao) { const e = MISSAO[estado.missao.etapa]; narrador.falar(e.id, NARRACAO[e.id] || e.titulo); } return;
+    case 'filme': estado.filme = !(estado.filme && !estado.filmeSuspenso); estado.filmeSuspenso = false; if (estado.missao) { if (estado.filme && !narrador.falando) irEtapa(estado.missao.etapa + 1); else mostrarConteudo(conteudoMissao(MISSAO[estado.missao.etapa], estado.missao.etapa)); } return;
+    case 'voltarMissao': if (estado.missao) mostrarConteudo(conteudoMissao(MISSAO[estado.missao.etapa], estado.missao.etapa)); else fecharPainel(); return;
+    case 'continuarMissao': estado.filmeSuspenso = false; continuarMissao(false); return;
+    case 'proxima': if (estado.missao) { estado.filmeSuspenso = false; irEtapa(estado.missao.etapa + 1); } return;
+    case 'anterior': if (estado.missao) { estado.filmeSuspenso = false; irEtapa(estado.missao.etapa - 1); } return;
+    case 'sairMissao': estado.missao = null; narrador.parar(); hud.setEstado(estado); fecharPainel(); return;
+    case 'modo': alternarModo(); return;
     case 'estacao': if (estado.estacao) sairEstacao(); else entrarEstacao(); return;
     case 'inicio': voltarInicio(); return;
-    case 'tempo-': mudarVelocidade(-1); return;
-    case 'tempo+': mudarVelocidade(1); return;
-    case 'pausa': estado.pausado = !estado.pausado; hud.setVelocidade(VELOCIDADES[estado.vel].rotulo, estado.pausado); atualizarMenu(true); return;
-    case 'orbitas': estado.orbitas = !estado.orbitas; sistema.setOrbitasVisiveis(estado.orbitas); hud.setEstado(estado); atualizarMenu(true); return;
-    case 'rotulos': estado.rotulos = !estado.rotulos; sistema.setRotulosVisiveis(estado.rotulos); hud.setEstado(estado); atualizarMenu(true); return;
+    case 'ritmo': setRitmo((estado.ritmo + 1) % RITMOS.length); reexibirConteudo(); return;
+    case 'pausa': estado.pausado = !estado.pausado; hud.setRitmo(ritmoAtual(), estado.pausado); atualizarMenu(); reexibirConteudo(); return;
+    case 'orbitas': estado.orbitas = !estado.orbitas; sistema.setOrbitasVisiveis(estado.orbitas); hud.setEstado(estado); atualizarMenu(); return;
+    case 'rotulos': estado.rotulos = !estado.rotulos; sistema.setRotulosVisiveis(estado.rotulos); hud.setEstado(estado); atualizarMenu(); return;
     default: return;
   }
+}
+
+/** Redesenha o painel atual quando algo que ele mostra mudou (ritmo, pausa). */
+function reexibirConteudo() {
+  if (!estado.painelAberto || !estado.conteudo) return;
+  const c = estado.conteudo;
+  if (estado.missao && c.corBorda === '#f2b84b' && c.subtitulo?.startsWith('Viagem guiada')) mostrarConteudo(conteudoMissao(MISSAO[estado.missao.etapa], estado.missao.etapa));
+  else if (estado.selecionado && c.titulo === tituloDe(estado.selecionado)) mostrarConteudo(conteudoInfo(estado.selecionado));
+  else { c.botoes = (c.botoes || []).map((b) => (b.id === 'ritmo' ? botaoRitmo() : b)); mostrarConteudo(c); }
 }
 
 function acaoHUD(acao) {
@@ -377,19 +492,23 @@ function acaoHUD(acao) {
   aoBotao(acao);
 }
 
-function mudarVelocidade(delta) {
-  estado.vel = THREE.MathUtils.clamp(estado.vel + delta, 0, VELOCIDADES.length - 1);
+function setRitmo(indice) {
+  estado.ritmo = THREE.MathUtils.clamp(indice, 0, RITMOS.length - 1);
   estado.pausado = false;
-  hud.setVelocidade(VELOCIDADES[estado.vel].rotulo, false);
-  atualizarMenu(true);
+  hud.setRitmo(ritmoAtual(), false);
+  atualizarMenu();
+}
+
+function setModo(modo) {
+  estado.modo = modo;
+  sistema.setModo(modo);
+  hud.setEstado(estado);
+  atualizarMenu();
 }
 
 function alternarModo() {
-  estado.modo = estado.modo === 'real' ? 'didatico' : 'real';
-  sistema.setModo(estado.modo);
+  setModo(estado.modo === 'real' ? 'didatico' : 'real');
   if (!estado.seguindo && !estado.estacao) { estado.selecionado = estado.selecionado || 'terra'; viajar(estado.selecionado); }
-  hud.setEstado(estado);
-  atualizarMenu(true);
 }
 
 function selecionar(id, mostrar = true) {
@@ -398,45 +517,68 @@ function selecionar(id, mostrar = true) {
   if (mostrar) mostrarConteudo(conteudoInfo(id));
 }
 
-function voltarInicio() {
+async function voltarInicio() {
+  if (estado.missao) { estado.missao = null; narrador.parar(); hud.setEstado(estado); }
+  fecharPainel();
+  await irInicio();
+}
+
+/** Volta ao ponto de vista inicial (acima do sistema, Sol à frente). */
+async function irInicio() {
   if (estado.estacao) sairEstacao();
   estado.seguindo = null;
   estado.tween = null;
-  if (renderer.xr.isPresenting) { rig.position.set(0, 2.5, 26); rig.rotation.set(0, 0, 0); }
-  else { estado.tween = { t: 0, dur: 1.2, camDe: camera.position.clone(), camPara: new THREE.Vector3(0, 12, 34), alvoDe: controls.target.clone(), alvoPara: new THREE.Vector3(0, 0, 0) }; }
-  fecharPainel();
+  if (renderer.xr.isPresenting) {
+    await fadePara(1, 0.3);
+    rig.position.copy(POSICAO_INICIAL_VR);
+    rig.rotation.set(0, 0, 0);
+    rig.updateMatrixWorld(true);
+    if (estado.painelAberto) posicionarPainel();
+    await fadePara(0, 0.4);
+  } else {
+    estado.tween = { t: 0, dur: 1.4, camDe: camera.position.clone(), camPara: CAMERA_INICIAL.clone(), alvoDe: controls.target.clone(), alvoPara: new THREE.Vector3(0, 0, 0) };
+    await esperar(1400);
+  }
+  hud.setDica('Clique em um planeta para saber mais · duplo clique para viajar');
 }
 
-/** Viaja até um corpo e passa a segui-lo. */
-function viajar(id) {
+/** Viaja até um corpo (com fade em VR) e passa a segui-lo. */
+async function viajar(id, { fator = 1 } = {}) {
   const c = sistema.corpos.get(id);
   if (!c) return;
   if (estado.estacao) sairEstacao();
   const alvo = sistema.posicaoDe(id, new THREE.Vector3());
   const raioVisual = c.dados.aneis ? c.raio * c.dados.aneis.externo : c.raio;
-  const dist = Math.max(raioVisual * 3.0, 1.2);
+  const dist = Math.max(raioVisual * 3.0, 1.2) * fator;
   // ponto de vista pelo lado iluminado, ligeiramente acima
   const paraSol = new THREE.Vector3(0, 0, 0).sub(alvo);
   if (paraSol.lengthSq() < 1e-6) paraSol.set(0, 0, 1);
   paraSol.normalize();
   const lateral = new THREE.Vector3().crossVectors(paraSol, new THREE.Vector3(0, 1, 0)).normalize();
   const dirVista = paraSol.multiplyScalar(0.75).addScaledVector(lateral, 0.6).add(new THREE.Vector3(0, 0.3, 0)).normalize();
-  const cabecaAlvo = alvo.clone().addScaledVector(dirVista, dist);
+  hud.setDica(`Seguindo ${tituloDe(id)} · pressione B/Y ou "Início" para voltar`);
   if (renderer.xr.isPresenting) {
+    await fadePara(1, 0.3);
+    const alvoAgora = sistema.posicaoDe(id, new THREE.Vector3());
+    const cabecaAlvo = alvoAgora.clone().addScaledVector(dirVista, dist);
+    rig.updateMatrixWorld(true);
     camera.getWorldDirection(vTmp);
     const yawAtual = Math.atan2(-vTmp.x, -vTmp.z);
-    const dirAlvo = alvo.clone().sub(cabecaAlvo);
+    const dirAlvo = alvoAgora.clone().sub(cabecaAlvo);
     const yawDesejado = Math.atan2(-dirAlvo.x, -dirAlvo.z);
     rig.rotation.y += yawDesejado - yawAtual;
-    rig.updateMatrixWorld();
+    rig.updateMatrixWorld(true);
     const cabecaLocal = camera.position.clone().applyQuaternion(rig.quaternion);
     rig.position.copy(cabecaAlvo).sub(cabecaLocal);
+    rig.updateMatrixWorld(true);
+    estado.seguindo = { id, ultima: alvoAgora.clone() };
     if (estado.painelAberto) posicionarPainel();
+    await fadePara(0, 0.4);
   } else {
     estado.tween = { t: 0, dur: 1.4, camDe: camera.position.clone(), offset: dirVista.clone().multiplyScalar(dist), alvoDe: controls.target.clone(), corpo: id };
+    estado.seguindo = { id, ultima: alvo.clone() };
+    await esperar(1400);
   }
-  estado.seguindo = { id, ultima: alvo.clone() };
-  hud.setDica(`Seguindo ${tituloDe(id)} · pressione B/Y ou "Início" para voltar`);
 }
 
 function seguir() {
@@ -471,35 +613,31 @@ function entrarEstacao() {
   if (renderer.xr.isPresenting) { rig.position.set(-16, 0, 14); rig.rotation.set(0, 0, 0); }
   else { camera.position.set(-22, 4, 20); controls.target.set(-13, 2, 0); }
   hud.setEstado(estado);
-  atualizarMenu(true);
+  atualizarMenu();
   mostrarConteudo(conteudoEstacao(), true);
 }
 
 function sairEstacao() {
   estado.estacao = false;
   sistema.setEstacaoVisivel(false);
-  if (renderer.xr.isPresenting) { rig.position.set(0, 2.5, 26); rig.rotation.set(0, 0, 0); }
-  else { camera.position.set(0, 12, 34); controls.target.set(0, 0, 0); }
+  if (renderer.xr.isPresenting) { rig.position.copy(POSICAO_INICIAL_VR); rig.rotation.set(0, 0, 0); }
+  else { camera.position.copy(CAMERA_INICIAL); controls.target.set(0, 0, 0); }
   hud.setEstado(estado);
-  atualizarMenu(true);
+  atualizarMenu();
   if (estado.conteudo && estado.conteudo.titulo?.startsWith('Comparar')) fecharPainel();
 }
 
-// ---------------------------------------------------------------- menu VR (controle esquerdo)
-let menuUltimaData = '';
-function atualizarMenu(forcar = false) {
-  if (!painelMenu.visivel && !forcar) return;
-  const dataTxt = fmtData(estado.data);
-  if (!forcar && dataTxt === menuUltimaData) return;
-  menuUltimaData = dataTxt;
+// ---------------------------------------------------------------- menu VR (flutua sobre o controle esquerdo)
+function atualizarMenu() {
+  if (!menuAtivo) return;
   painelMenu.mostrar({
-    titulo: dataTxt,
-    subtitulo: `${estado.pausado ? 'Pausado' : VELOCIDADES[estado.vel].rotulo} · ${estado.modo === 'real' ? 'distâncias reais' : 'distâncias didáticas'}`,
+    titulo: estado.pausado ? 'Tempo pausado' : `Ritmo: ${ritmoAtual().curto} · ${ritmoAtual().descricao}`,
+    subtitulo: estado.modo === 'real' ? 'Distâncias reais (1 UA = 40 m)' : 'Distâncias comprimidas (didáticas)',
     botoes: [
-      { id: 'tempo-', rotulo: '− tempo', largura: 200 }, { id: 'pausa', rotulo: estado.pausado ? 'Continuar' : 'Pausar', largura: 220 }, { id: 'tempo+', rotulo: '+ tempo', largura: 200 },
+      { id: 'pausa', rotulo: estado.pausado ? 'Continuar' : 'Pausar', largura: 240 }, { id: 'ritmo', rotulo: `Ritmo: ${ritmoAtual().curto} ▸`, largura: 360 },
       { id: 'orbitas', rotulo: estado.orbitas ? 'Órbitas: sim' : 'Órbitas: não', largura: 300 }, { id: 'rotulos', rotulo: estado.rotulos ? 'Rótulos: sim' : 'Rótulos: não', largura: 300 },
       { id: 'modo', rotulo: estado.modo === 'real' ? 'Distâncias didáticas' : 'Distâncias reais', largura: 380, primario: true }, { id: 'estacao', rotulo: estado.estacao ? 'Voltar ao sistema' : 'Comparar tamanhos', largura: 380 },
-      { id: 'missao', rotulo: 'Missão guiada', largura: 300 }, { id: 'ajuda', rotulo: 'Ajuda', largura: 160 }, { id: 'inicio', rotulo: 'Início', largura: 160 },
+      { id: 'missao', rotulo: 'Assistir a viagem', largura: 330 }, { id: 'ajuda', rotulo: 'Ajuda', largura: 150 }, { id: 'inicio', rotulo: 'Início', largura: 150 },
     ],
     escalaTexto: 1.15,
   });
@@ -538,8 +676,8 @@ function configurarDesktop() {
     if (ev.target && ['INPUT', 'TEXTAREA'].includes(ev.target.tagName)) return;
     switch (ev.key) {
       case ' ': ev.preventDefault(); aoBotao('pausa'); break;
-      case '+': case '=': mudarVelocidade(1); break;
-      case '-': case '_': mudarVelocidade(-1); break;
+      case '+': case '=': setRitmo(estado.ritmo + 1); reexibirConteudo(); break;
+      case '-': case '_': setRitmo(estado.ritmo - 1); reexibirConteudo(); break;
       case 'o': case 'O': aoBotao('orbitas'); break;
       case 'r': case 'R': aoBotao('rotulos'); break;
       case 'd': case 'D': alternarModo(); break;
@@ -563,17 +701,22 @@ const clock = new THREE.Clock();
 let acumHUD = 0;
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (!estado.pausado) estado.data += VELOCIDADES[estado.vel].v * dt * 1000;
+  if (!estado.pausado) estado.data += ritmoAtual().v * dt * 1000;
   camera.getWorldPosition(vCam);
   if (!estado.estacao) {
     sistema.atualizar(estado.data, vCam, estado.selecionado, estado.hover);
     seguir();
   } else sistema.atualizarEstacao(vCam);
   controlesXR.atualizar(dt);
-  if (!renderer.xr.isPresenting) { animarCamera(dt); if (!estado.tween) controls.update(); }
+  if (renderer.xr.isPresenting) { rig.updateMatrixWorld(true); orientarPaineis(); }
+  else { animarCamera(dt); if (!estado.tween) controls.update(); }
+  atualizarFade(dt);
   acumHUD += dt;
-  if (acumHUD > 0.25) { acumHUD = 0; hud.setData(fmtData(estado.data)); if (renderer.xr.isPresenting) atualizarMenu(); }
+  if (acumHUD > 1) { acumHUD = 0; hud.setData(fmtData(estado.data)); }
   renderer.render(scene, camera);
 }
+
+// gancho para depuração e testes automatizados
+window.SSVR = { estado, narrador, irEtapa, aoBotao, versao: VERSAO };
 
 iniciar().catch((e) => { console.error(e); hud.setCarregando(1, 'Erro ao iniciar: ' + e.message); });

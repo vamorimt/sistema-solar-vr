@@ -3,6 +3,9 @@
 // "Keplerian Elements for Approximate Positions of the Major Planets" (época J2000).
 // Texturas: Solar System Scope (CC BY 4.0), three.js (MIT) e Planet Pixel Emporium.
 
+import NARRACAO from './narracao.json';
+export { NARRACAO };
+
 export const RAIO_TERRA_KM = 6371;
 export const UA_KM = 149597870.7;
 
@@ -46,8 +49,8 @@ export const PLANETAS = [
     temperatura: '-180 °C (noite) a 430 °C (dia)', elementos: ELEMENTOS.mercurio,
     resumo: 'O menor planeta e o mais próximo do Sol. Quase não tem atmosfera, por isso a diferença de temperatura entre o dia e a noite é a maior do Sistema Solar. Sua superfície é coberta de crateras, parecida com a da Lua.',
     fatos: [
-      'Um ano em Mercúrio dura só 88 dias terrestres.',
-      'Um dia (rotação completa) dura 59 dias terrestres.',
+      'Muita gente imagina Mercúrio vermelho por estar perto do Sol, mas ele é cinza como a Lua: rocha escura (basalto e silicatos) coberta de crateras, sem atmosfera para colorir o céu. O planeta vermelho é Marte, por causa da ferrugem.',
+      'Um ano em Mercúrio dura só 88 dias terrestres, mas um dia (rotação completa) dura 59 dias.',
       'Apesar de ser o mais próximo do Sol, não é o mais quente — Vênus é.',
     ],
     bncc: ['EF09CI14'],
@@ -85,7 +88,7 @@ export const PLANETAS = [
     resumo: 'Nosso planeta. O único lugar conhecido com vida e com água líquida na superfície. A inclinação do eixo de rotação (23,4°) é o que causa as estações do ano; a rotação causa o dia e a noite; a translação em torno do Sol define o ano.',
     fatos: [
       '71% da superfície é coberta por oceanos.',
-      'A Terra gira a cerca de 1.670 km/h no equador.',
+      'A Terra gira a cerca de 1.670 km/h no equador — uma volta a cada 24 horas. Cada planeta tem o seu próprio "dia": Júpiter gira em 10 horas, Vênus leva 243 dias. Por isso, com o tempo acelerado, uns giram rápido e outros parecem parados.',
       'A atmosfera nos protege da radiação e dos meteoros.',
     ],
     bncc: ['EF06CI13', 'EF06CI14', 'EF08CI13'],
@@ -237,18 +240,24 @@ export const BNCC = {
   EF09CI17: 'Analisar o ciclo evolutivo do Sol (nascimento, vida e morte) baseado no conhecimento das etapas de evolução de estrelas de diferentes dimensões e os efeitos desse processo no nosso planeta.',
 };
 
-// Roteiro da Missão Guiada (trilha de aprendizagem consistente)
+// Roteiro da Missão Guiada — um "filme" narrado (textos em narracao.json, áudio em assets/audio/<id>.mp3)
+// ritmo: 'dias' (1 s = 1 h) mostra a rotação · 'meses' (1 s = 1 dia) mostra luas e órbitas internas · 'anos' (1 s = 1 mês) mostra as órbitas externas
+// distancia: multiplicador da distância padrão de observação · checkpoint: pergunta do corpo antes de seguir
 export const MISSAO = [
-  { corpo: 'sol', titulo: 'Parada 1 · O Sol', texto: 'Tudo começa aqui. Observe o tamanho do Sol em relação aos planetas ao redor. Ele é uma estrela — e a única fonte de luz e calor do Sistema Solar.' },
-  { corpo: 'mercurio', titulo: 'Parada 2 · Mercúrio', texto: 'O primeiro dos quatro planetas rochosos. Repare como sua órbita é a mais rápida: acelere o tempo no menu e compare com os outros.' },
-  { corpo: 'venus', titulo: 'Parada 3 · Vênus', texto: 'Parecido com a Terra em tamanho, mas um "forno" por causa do efeito estufa. Observe a rotação lenta e ao contrário.' },
-  { corpo: 'terra', titulo: 'Parada 4 · Terra e Lua', texto: 'Nossa casa. Repare no eixo inclinado (23,4°) — ele causa as estações — e na Lua girando ao redor. Acelere o tempo para ver a Lua completar uma volta (~27 dias).' },
-  { corpo: 'marte', titulo: 'Parada 5 · Marte', texto: 'O último planeta rochoso. Compare a cor e o tamanho com a Terra. Marte é o próximo destino das viagens tripuladas.' },
-  { corpo: 'cinturao', titulo: 'Parada 6 · Cinturão de Asteroides', texto: 'A fronteira entre os planetas rochosos e os gigantes. Milhões de rochas, mas muito espaço vazio entre elas.' },
-  { corpo: 'jupiter', titulo: 'Parada 7 · Júpiter', texto: 'O gigante. Veja as faixas de nuvens e as 4 luas galileanas girando bem rápido ao redor dele.' },
-  { corpo: 'saturno', titulo: 'Parada 8 · Saturno', texto: 'Os anéis são finíssimos em comparação com a largura. Procure Titã, a lua com atmosfera.' },
-  { corpo: 'urano', titulo: 'Parada 9 · Urano', texto: 'Repare que ele gira "deitado". Os anéis ficam quase na vertical em relação à órbita.' },
-  { corpo: 'netuno', titulo: 'Parada 10 · Netuno', texto: 'O mais distante. Daqui o Sol parece só uma estrela brilhante. Tritão orbita ao contrário.' },
-  { corpo: 'kuiper', titulo: 'Parada 11 · Cinturão de Kuiper', texto: 'Além de Netuno: o reino dos planetas anões, como Plutão, e dos cometas.' },
-  { corpo: 'escala', titulo: 'Parada 12 · A escala real', texto: 'Até agora as distâncias estavam comprimidas para caber na sala. Ative as "distâncias reais" no menu e veja como o Sistema Solar é, na verdade, quase todo espaço vazio.' },
+  { id: 'abertura', titulo: 'Bem-vindo ao Sistema Solar', corpo: null, ritmo: 'meses' },
+  { id: 'sol', titulo: 'O Sol', corpo: 'sol', ritmo: 'meses', distancia: 1.3 },
+  { id: 'mercurio', titulo: 'Mercúrio', corpo: 'mercurio', ritmo: 'meses' },
+  { id: 'venus', titulo: 'Vênus', corpo: 'venus', ritmo: 'meses' },
+  { id: 'terra', titulo: 'Terra', corpo: 'terra', ritmo: 'dias', checkpoint: 'terra' },
+  { id: 'lua', titulo: 'A Lua', corpo: 'terra', ritmo: 'meses', distancia: 3.2 },
+  { id: 'marte', titulo: 'Marte', corpo: 'marte', ritmo: 'dias' },
+  { id: 'cinturao', titulo: 'Cinturão de Asteroides', corpo: 'cinturao', ritmo: 'meses', checkpoint: 'cinturao' },
+  { id: 'jupiter', titulo: 'Júpiter', corpo: 'jupiter', ritmo: 'dias' },
+  { id: 'luas-jupiter', titulo: 'As luas de Galileu', corpo: 'jupiter', ritmo: 'meses', distancia: 2.6 },
+  { id: 'saturno', titulo: 'Saturno', corpo: 'saturno', ritmo: 'dias', checkpoint: 'saturno' },
+  { id: 'urano', titulo: 'Urano', corpo: 'urano', ritmo: 'dias' },
+  { id: 'netuno', titulo: 'Netuno', corpo: 'netuno', ritmo: 'dias' },
+  { id: 'kuiper', titulo: 'Cinturão de Kuiper', corpo: 'kuiper', ritmo: 'anos', checkpoint: 'kuiper' },
+  { id: 'escala', titulo: 'A escala real', corpo: 'terra', ritmo: 'anos', distancia: 6, modo: 'real' },
+  { id: 'fim', titulo: 'Fim da viagem', corpo: null, ritmo: 'meses', modo: 'didatico' },
 ];

@@ -21,8 +21,8 @@
 |---|---|---|
 | EF06CI13 | Evidências da esfericidade da Terra | Terra em 3D, terminador dia/noite |
 | EF06CI14 | Movimentos relativos Terra–Sol (gnômon) | Rotação da Terra com tempo acelerado (v0.3: sombra de um gnômon) |
-| EF08CI12 | Fases da Lua e eclipses | Lua orbitando a Terra com face iluminada (v0.2: estação Sol-Terra-Lua) |
-| EF08CI13 | Rotação, translação e inclinação do eixo → estações | Eixo inclinado 23,4°, translação real (v0.2: estação das estações) |
+| EF08CI12 | Fases da Lua e eclipses | Lua orbitando a Terra com face iluminada (v0.3: estação Sol-Terra-Lua) |
+| EF08CI13 | Rotação, translação e inclinação do eixo → estações | Eixo inclinado 23,4°, translação real (v0.3: estação das estações) |
 | EF09CI14 | Composição e estrutura do Sistema Solar; localização na Via Láctea | Missão guiada, cinturões, modos de escala, céu com Via Láctea |
 | EF09CI15 | Leituras do céu em diferentes culturas | v0.4: constelações indígenas e greco-romanas |
 | EF09CI16 | Viabilidade da vida fora da Terra; distâncias e tempos de viagem | Fichas (temperatura, gravidade, atmosfera); v0.3: "quanto tempo leva para chegar?" |
@@ -31,30 +31,37 @@
 ### Desenho da aprendizagem (para ser consistente)
 
 1. **Exploração livre** sempre disponível — o aluno escolhe para onde ir; o sistema mostra a ficha e sugere o quiz.
-2. **Missão guiada** com 12 paradas em ordem (Sol → Netuno → Kuiper → escala real). Cada parada: 1 ideia central + 1 pergunta com feedback imediato e explicação. Progresso salvo no dispositivo.
+2. **Viagem guiada narrada** com 16 paradas em ordem (Sol → Netuno → Kuiper → escala real), no automático ("filme") ou passo a passo. Cada parada: 1 ideia central narrada; 4 checkpoints com pergunta, feedback imediato e explicação. Progresso salvo no dispositivo.
 3. **Comparações sensoriais** que só a VR entrega: estar ao lado de Júpiter em escala, ver o Sol de 109 m, "sentir" o vazio das distâncias reais.
 4. **Tempo como variável**: acelerar para ver Mercúrio dar 4 voltas enquanto a Terra dá 1 (relação distância × período, base para Kepler no Ensino Médio).
-5. **Modo professor** (v0.2): roteiro de aula, relatório de acertos da turma, códigos BNCC visíveis.
+5. **Modo professor** (v0.3): roteiro de aula, relatório de acertos da turma, códigos BNCC visíveis.
 
 ## 3. Ação — roteiro de versões
 
 ### v0.1 (entregue) — base testável
 Cena completa, posições reais, tempo, dois modos de distância, estação de tamanhos, fichas, curiosidades, quiz, missão guiada, VR com controles do Pico, desktop/celular, preview em arquivo único.
 
-### v0.2 — estações temáticas (BNCC 8º ano)
-- Estação **Sol–Terra–Lua**: fases da Lua vistas da Terra e "de fora" ao mesmo tempo; eclipses solar e lunar com alinhamento.
-- Estação **Estações do ano**: Terra com eixo inclinado, hemisférios Norte/Sul, insolação; "arraste a Terra pela órbita".
-- Fade ao teletransportar (conforto) e vinheta ao mover com o analógico.
-- Modelos dos controles do Pico (GLTF do WebXR Input Profiles).
-- Modo professor: seleção de turma/aluno, exportar acertos (CSV).
+### v0.2 (entregue) — viagem narrada e correções do primeiro teste em família
+Feedback do teste (06/09): experiência aprovada; a exploração livre funcionou. Ajustes pedidos e feitos:
+- Painel "ao contrário": corrigido (orientação em coordenadas de mundo + painéis sempre virados para a cabeça; menu flutua sobre o controle esquerdo).
+- Data/hora que mudava rápido demais: retirada do VR; no lugar, um "relógio" por planeta na ficha (quanto tempo real leva um dia e um ano dali) e explicação de por que a Terra gira rápido e Vênus parece parado.
+- Controle de tempo difícil no VR: virou um botão "Ritmo ▸" com três passos (dias / meses / anos) presente em todos os painéis.
+- Missão guiada virou um **filme narrado** com 16 paradas, áudio pt-BR, ritmo por parada, 4 checkpoints e retorno à exploração livre; menos cliques (a narração já traz o conteúdo; a ficha é opcional).
+- Curiosidade sobre a cor de Mercúrio (cinza, não vermelho); fade entre teletransportes.
 
-### v0.3 — profundidade e acessibilidade
+### v0.3 — luas, estações temáticas e voz
+- **Missões das luas** (pedido do teste): uma viagem curta por planeta — Terra/Lua (fases), Júpiter (galileanas), Saturno (Titã, anéis de perto), Netuno (Tritão retrógrado).
+- Narração com voz neural (gerar com `tools/gerar-narracao.py` no PC) e trilha ambiente discreta.
+- Estação **Sol–Terra–Lua** (fases e eclipses, EF08CI12) e estação **Estações do ano** (EF08CI13).
+- Modelos dos controles do Pico; vinheta ao mover com o analógico; modo professor (relatório de acertos).
+
+### v0.4 — profundidade e acessibilidade
 - Gnômon virtual (EF06CI14) e "viagem até Marte: quanto tempo?" (EF09CI16).
 - Narração em áudio pt-BR dos painéis (TTS gravado) e legendas maiores.
 - Modo "só olhar" (gaze) para turmas sem controle.
 - Texturas 4k/8k opcionais para PC; nuvens em movimento; luzes noturnas da Terra.
 
-### v0.4 — cultura e universo
+### v0.5 — cultura e universo
 - Constelações (greco-romanas e indígenas brasileiras) no céu (EF09CI15).
 - Linha do tempo do Sol (EF09CI17) e "onde estamos na Via Láctea".
 - Multiusuário simples (professor guia a turma) — avaliar viabilidade.

@@ -8,10 +8,9 @@ export class HUD {
       <div class="topo">
         <div class="marca"><strong>Sistema Solar VR</strong><span>Ciências · Fundamental II</span></div>
         <div class="tempo">
-          <button data-acao="tempo-" title="Mais devagar">−</button>
-          <span class="vel" id="hud-vel">1 dia/s</span>
-          <button data-acao="tempo+" title="Mais rápido">+</button>
           <button data-acao="pausa" id="hud-pausa" title="Pausar / continuar">⏸</button>
+          <button data-acao="ritmo" id="hud-ritmo" class="ritmo" title="Muda a velocidade do tempo">Ritmo: meses ▸</button>
+          <span class="vel" id="hud-vel">1 s = 1 dia</span>
           <span class="data" id="hud-data"></span>
         </div>
         <div class="toggles">
@@ -47,8 +46,9 @@ export class HUD {
   }
 
   setData(txt) { this.root.querySelector('#hud-data').textContent = txt; }
-  setVelocidade(txt, pausado) {
-    this.root.querySelector('#hud-vel').textContent = txt;
+  setRitmo(ritmo, pausado) {
+    this.root.querySelector('#hud-ritmo').textContent = `${ritmo.rotulo} ▸`;
+    this.root.querySelector('#hud-vel').textContent = pausado ? 'pausado' : ritmo.descricao;
     this.root.querySelector('#hud-pausa').textContent = pausado ? '▶' : '⏸';
   }
   setEstado({ orbitas, rotulos, modo, estacao, missao }) {
@@ -100,7 +100,8 @@ export const CSS = `
   #hud button:hover { background:rgba(50,80,150,.9); }
   #hud button.ativo { background:#2b7cff; border-color:#2b7cff; }
   #hud button.destaque { border-color:#f2b84b; color:#ffd98a; }
-  #hud .vel { min-width:78px; text-align:center; font-weight:600; font-size:13px; }
+  #hud .vel { min-width:78px; text-align:center; font-size:12px; color:#b9c6e6; }
+  #hud button.ritmo { border-color:#8fd0ff; font-weight:600; }
   #hud .data { font-size:12px; color:#b9c6e6; margin-left:6px; font-variant-numeric: tabular-nums; }
   #hud .cartao { position:absolute; right:14px; top:96px; width:min(400px, calc(100vw - 28px)); max-height:calc(100vh - 200px); overflow:auto; background:rgba(8,13,30,.92); border:1px solid rgba(120,150,220,.35); border-radius:16px; padding:18px 20px; pointer-events:auto; backdrop-filter: blur(8px); box-shadow:0 10px 40px rgba(0,0,0,.5); }
   #hud .cartao h2 { margin:0 0 4px; font-size:22px; }
